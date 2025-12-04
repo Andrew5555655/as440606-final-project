@@ -1,0 +1,475 @@
+---
+title: "Add Health Replication"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+In this report, our group replicates and extends an empirical study based on Wave I of the Add Health dataset. The original study examines the relationship between academic performance, ethnicity, immigrant status, and adolescent popularity. Popularity is measured by the number of peer nominations each student receives, and academic performance is captured by the grade point average calculated from core subjects.
+
+The original project uses Add Health data to replicate the analysis of Ye and Fletcher, 2022. In this R Markdown report, we reproduce their Figure 1 and the two regression tables following the same specifications. Building on this foundation, we introduce an econometric extension by adding several antisocial behavior variables such as drinking, drunk driving, marijuana use, and causing serious injury to others. We then re-estimate popularity using count data models, including Poisson regression and negative binomial regression, and discuss these results as part of our robustness checks.
+
+
+```{r,message=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+
+# Data and Variable Construction
+
+We use the public-use data from Wave I of the Add Health survey, collected in 1994–1995 as part of the National Longitudinal Study of Adolescent to Adult Health. In the preliminary steps, we first merge the three public-use data files using the student identifier AID to create an individual-level dataset. During variable construction and missing-value handling through listwise deletion, we gradually narrow the dataset to the final analytical sample required for our study.
+
+
+```{r}
+load("21600-0001-Data.rda")
+load("21600-0002-Data.rda")
+load("21600-0003-Data.rda")
+ls()
+d1 <- da21600.0001
+d2 <- da21600.0002
+d3 <- da21600.0003
+```
+
+```{r}
+dataset <- merge(d1, d2) %>%
+merge(d3)
+
+```
+
+
+```{r,message=FALSE}
+library(gtsummary)
+library(broom)
+library(knitr)
+library(rmarkdown)
+library(viridis)
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+library(forcats)
+```
+
+# Control Variables
+
+Our control variables follow the specification used in Ye and Fletcher, 2022. They capture three main types of information.
+
+(1) basic demographic characteristics, including age and gender.
+
+(2) family structure, such as whether the student lives with their mother, whether they are a twin, household size, and the number of other adolescents in grades 7–12 living in the same home.
+
+(3) parental socioeconomic status, including parental education, employment status, and broad occupational categories.
+
+During data cleaning, we recode the original categorical variables into more readable labels and, when necessary, assign missing values to 0 or to a separate “unknown” category.
+
+
+```{r}
+df.control <- dataset %>%
+select(AID, S1, S2, S25, S26, S23, S24, S11, S27, S28, S12, S18,
+S15, S21, S14, S20, IYEAR, SCH_YR) %>%
+  rename(
+    age = S1,sex = S2,adopted = S25,adopt_bio = S26,twin = S23,
+    live_twin = S24,live_mom = S11,hh_size = S27,hh_7_12 = S28,
+    edu_mom = S12,edu_dad = S18,work_mom = S15,work_dad = S21,
+    job_mom = S14,job_dad = S20,year = IYEAR,yrs_school = SCH_YR)
+```
+
+
+
+
+```{r}
+table(df.control$sex)
+# sex
+df.control$sex <- suppressWarnings(as.numeric(df.control$sex))
+df.control$sex <- ifelse(df.control$sex == 1, "Male", "Female")
+table(df.control$adopted)
+```
+
+
+
+
+```{r}
+# adopted
+df.control$adopted <- as.numeric(df.control$adopted)
+df.control$adopted <- ifelse(df.control$adopted == 2, "Yes", "No")
+table(df.control$adopted)
+# adopt_bio
+table(df.control$adopt_bio)
+df.control$adopt_bio <- as.numeric(df.control$adopt_bio)
+df.control$adopt_bio <- ifelse(df.control$adopt_bio == 2, "Yes", "No")
+# twin
+table(df.control$twin)
+df.control$twin <- as.numeric(df.control$twin)
+df.control$twin <- ifelse(df.control$twin == 2, "Yes", "No")
+# live_twin
+table(df.control$live_twin)
+df.control$live_twin <- as.numeric(df.control$live_twin)
+df.control$live_twin <- ifelse(df.control$live_twin == 2, "Yes", "No")
+# live_mom
+df.control$live_mom <- as.numeric(df.control$live_mom)
+df.control$live_mom <- ifelse(df.control$live_mom == 2, "Yes", "No")
+# hh_7_12
+table(df.control$hh_7_12)
+df.control$hh_7_12 <- as.numeric(df.control$hh_7_12)
+df.control$hh_7_12 <- ifelse(df.control$hh_7_12 == 1, "0",
+ifelse(df.control$hh_7_12 == 2, "1",
+ifelse(df.control$hh_7_12 == 3, "2",
+ifelse(df.control$hh_7_12 == 4, "3",
+ifelse(df.control$hh_7_12 == 5, "4",
+ifelse(df.control$hh_7_12 == 6, "5",
+ifelse(df.control$hh_7_12 == 7, "6 or more", 0)))))))
+table(df.control$edu_mom)
+df.control$edu_mom <- as.numeric(df.control$edu_mom)
+df.control$edu_mom <- ifelse(df.control$edu_mom == 1, "8th grade or less",
+ifelse(df.control$edu_mom == 2, ">8th grade/didn't graduate high school",
+ifelse(df.control$edu_mom == 3, "High school graduate",
+ifelse(df.control$edu_mom == 4, "Completed a GED",
+ifelse(df.control$edu_mom == 5, "Business/trade/voc. school after high school",
+ifelse(df.control$edu_mom == 6, "College/didn't graduate",
+ifelse(df.control$edu_mom == 7, "College/University graduate",
+ifelse(df.control$edu_mom == 8, "Prof training beyond 4-year college/univ",
+ifelse(df.control$edu_mom == 9, "Went to school/but I don't know level",
+ifelse(df.control$edu_mom == 10, "Never went to school",
+"I don't know if he went to school"))))))))))
+df.control$edu_dad <- as.numeric(df.control$edu_dad)
+df.control$edu_dad <- ifelse(df.control$edu_dad == 1, "8th grade or less",
+ifelse(df.control$edu_dad == 2, ">8th grade/didn't graduate high school",
+ifelse(df.control$edu_dad == 3, "High school graduate",
+ifelse(df.control$edu_dad == 4, "Completed a GED",
+ifelse(df.control$edu_dad == 5, "Business/trade/voc. school after high school",
+ifelse(df.control$edu_dad == 6, "College/didn't graduate",
+ifelse(df.control$edu_dad == 7, "College/University graduate",
+ifelse(df.control$edu_dad == 8, "Prof training beyond 4-year college/univ",
+ifelse(df.control$edu_dad == 9, "Went to school/but I don't know level",
+ifelse(df.control$edu_dad == 10, "Never went to school",
+"I don't know if he went to school"))))))))))
+```
+
+
+
+```{r}
+table(df.control$work_mom)
+df.control$work_mom <- as.numeric(df.control$work_mom)
+df.control$work_mom <- ifelse(df.control$work_mom == 2, "yes", "no")
+df.control$work_dad <- as.numeric(df.control$work_dad)
+df.control$work_dad <- ifelse(df.control$work_dad == 2, "yes", "no")
+# job_dad / job_mom
+table(df.control$job_mom)
+df.control$job_dad <- as.numeric(df.control$job_dad)
+df.control$job_dad <- ifelse(df.control$job_dad == 1, "Homemaker",
+ifelse(df.control$job_dad == 2, "Professional 1/doctor/lawyer/scientist",
+ifelse(df.control$job_dad == 3, "Professional 2/teacher/librarian/nurse",
+ifelse(df.control$job_dad == 4, "Manager/executive/director",
+ifelse(df.control$job_dad == 5, "Technical/computer specialist/radiologist",
+ifelse(df.control$job_dad == 6, "Office worker/bookkepers/clerk/secretary",
+ifelse(df.control$job_dad == 7, "Sales worker/insurance agent/store clerk",
+ifelse(df.control$job_dad == 8, "Restaurant worker/personal service/waitress/housekeeper",
+ifelse(df.control$job_dad == 9, "Craftsperson/toolmaker/woodmaker",
+ifelse(df.control$job_dad == 10, "Construction worker/carpenter/crane operator",
+ifelse(df.control$job_dad == 11, "Mechanic/electrician/plumber/machinist",
+ifelse(df.control$job_dad == 12, "Factory worker/labourer/assembler/janitor",
+ifelse(df.control$job_dad == 13, "Transportation/bus or taxi driver",
+ifelse(df.control$job_dad == 14, "Military/security/police officer/soldier/fire fighter",
+ifelse(df.control$job_dad == 15, "Farm/fishery worker",
+ifelse(df.control$job_dad == 16, "Doesn't work but not disabled",
+ifelse(df.control$job_dad == 17, "Is disabled/therefore doesn't work",
+ifelse(df.control$job_dad == 19, "Receives public assistant/welfare",
+"I don't know her job"))))))))))))))))))
+df.control$job_mom <- as.numeric(df.control$job_mom)
+df.control$job_mom <- ifelse(df.control$job_mom == 1, "Homemaker",
+ifelse(df.control$job_mom == 2, "Professional 1/doctor/lawyer/scientist",
+ifelse(df.control$job_mom == 3, "Professional 2/teacher/librarian/nurse",
+ifelse(df.control$job_mom == 4, "Manager/executive/director",
+ifelse(df.control$job_mom == 5, "Technical/computer specialist/radiologist",
+ifelse(df.control$job_mom == 6, "Office worker/bookkepers/clerk/secretary",
+ifelse(df.control$job_mom == 7, "Sales worker/insurance agent/store clerk",
+ifelse(df.control$job_mom == 8, "Restaurant worker/personal service/waitress/housekeeper",
+ifelse(df.control$job_mom == 9, "Craftsperson/toolmaker/woodmaker",
+ifelse(df.control$job_mom == 10, "Construction worker/carpenter/crane operator",
+ifelse(df.control$job_mom == 11, "Mechanic/electrician/plumber/machinist",
+ifelse(df.control$job_mom == 12, "Factory worker/labourer/assembler/janitor",
+ifelse(df.control$job_mom == 13, "Transportation/bus or taxi driver",
+ifelse(df.control$job_mom == 14, "Military/security/police officer/soldier/fire fighter",
+ifelse(df.control$job_mom == 15, "Farm/fishery worker",
+ifelse(df.control$job_mom == 16, "Doesn't work but not disabled",
+ifelse(df.control$job_mom == 17, "Is disabled/therefore doesn't work",
+ifelse(df.control$job_mom == 19, "Receives public assistant/welfare",
+"I don't know her job"))))))))))))))))))
+```
+
+
+
+```{r}
+df.control <- df.control %>%
+mutate(across(where(is.factor), as.character)) %>%
+mutate(across(everything(), ~replace(., is.na(.), 0)))
+```
+
+# GPA Centering
+
+Academic performance is measured using a GPA indicator constructed as the average of the numeric grades in four core subjects: English, mathematics, history or social studies, and science. Observations with implausible values above 4 are removed. Following the original study, we standardize and mean-center the GPA variable.
+
+This transformation allows the coefficients on the interaction terms between GPA and race or immigrant status to be interpreted as follows: relative to a student with average academic performance, the coefficient captures the marginal change in popularity, measured by the number of peer nominations, associated with a one-standard-deviation increase in GPA for students of different racial and immigrant backgrounds.
+
+
+```{r}
+GPA <- dataset %>%
+select(AID, S10A, S10B, S10C, S10D) %>%
+na.omit()
+gpa <- GPA %>%
+rename(grade_eng = S10A,grade_math = S10B,
+       grade_hist_soc = S10C,grade_sci = S10D)
+gpa$grade_eng <- as.numeric(gpa$grade_eng)
+table(gpa$grade_math)
+gpa$grade_math <- as.numeric(gpa$grade_math)
+gpa$grade_hist_soc <- as.numeric(gpa$grade_hist_soc)
+gpa$grade_sci <- as.numeric(gpa$grade_sci)
+gpa <- gpa %>%
+  pivot_longer(starts_with("grade"), 
+               names_to = "course", values_to = "grade")%>%
+  filter(grade <= 4) %>%
+  group_by(AID) %>%
+  summarize(gpa = mean(grade))
+gpa$center <- scale(gpa$gpa, center = TRUE, scale = TRUE)
+table(gpa$center)
+```
+
+# Race and Generation
+
+The race variable is constructed from the detailed racial and ethnic categories provided in the Add Health questionnaire. Because respondents may select multiple categories, we consolidate these selections into a single variable, Race_category, classifying individuals who chose more than one option as Multiracial.
+
+Immigrant status is determined using the birthplace of the student and their parents, following the coding rules used in the original study. Based on this information, we distinguish between Immigrant and Non-immigrant adolescents.
+
+We then combine race and immigrant generation into a single variable, Race and immigration, which captures variation across different race–immigrant status groupings for the subsequent analysis.
+
+```{r}
+df.race <- dataset %>%
+  select(AID, H1GI5A, H1GI5B, H1GI5C, H1GI5D, H1GI5E, H1GI5F,H1GI6A,
+         H1GI6B, H1GI6C, H1GI6E,H1GI7A, H1GI7B, H1GI7C, H1GI7D, 
+         H1GI7E, H1GI7F, H1GI7G) %>%
+  rename("Mexican" = H1GI5A,"Chicano" = H1GI5B,"Cuban" = H1GI5C,
+         "Puerto-Rican" = H1GI5D,"Central/SO Amer" = H1GI5E,
+         "Other" = H1GI5F,"White" = H1GI6A,
+         "African-American" = H1GI6B,"American-Indian" = H1GI6C,
+         "Race (Other)" = H1GI6E,"Chinese" = H1GI7A,
+         "Filipino" = H1GI7B,"Japanese" = H1GI7C,
+         "Asian-Indian" = H1GI7D,"Korean" = H1GI7E,
+         "Vietnamese" = H1GI7F,"Asian (Other)" = H1GI7G)
+df.race <- df.race %>%
+  mutate(across(-AID, ~ as.numeric(.) %>% replace(is.na(.), 0)))
+df.race_cat <- df.race %>%
+pivot_longer(Mexican:`Asian (Other)`) %>%
+  group_by(AID, value) %>%
+  summarise(Race_category = paste(name, collapse = "&"), .groups = "drop") %>%
+  filter(value == 2) %>%
+  select(-value)
+df.race_cat$multiracial <- ifelse(
+grepl("&", df.race_cat$Race_category),"Multiracial", "Not Multiracial")
+df.race_cat$Race_category <- ifelse(df.race_cat$multiracial == "Multiracial",
+"Multiracial",df.race_cat$Race_category)
+```
+
+
+
+
+
+```{r}
+df.independent <- dataset %>%
+  select(AID, IDGX2) %>%
+  rename(num_nom = IDGX2) %>%
+  mutate(num_nom = replace(num_nom, is.na(num_nom), 0))
+```
+
+
+
+```{r}
+immigration_status <- dataset %>%
+  select(AID, S8, S13, S19) %>%
+  rename(born_us = S8,mom_born_us = S13,dad_born_us = S19) %>%
+  mutate(across(c(born_us, mom_born_us, dad_born_us),
+                ~ as.numeric(.) %>% replace(is.na(.), 1))) %>%
+  mutate(Generation = case_when(
+    born_us == 2 & mom_born_us == 1 & dad_born_us == 1 ~ "Non-immigrant",
+    born_us == 2 & mom_born_us == 2 & dad_born_us == 1 ~ "Non-immigrant",
+    born_us == 2 & mom_born_us == 1 & dad_born_us == 2 ~ "Non-immigrant",
+    born_us == 2 & mom_born_us == 2 & dad_born_us == 2 ~ "Non-immigrant",
+    born_us == 1 & mom_born_us == 1 & dad_born_us == 1 ~ "Immigrant",
+    born_us == 1 & mom_born_us == 1 & dad_born_us == 2 ~ "Immigrant",
+    born_us == 1 & mom_born_us == 2 & dad_born_us == 1 ~ "Immigrant",
+    born_us == 1 & mom_born_us == 2 & dad_born_us == 2 ~ "Non-immigrant"))
+gen <- immigration_status %>%
+select(AID, Generation)
+```
+
+
+# Antisocial Behavior Variables
+
+Building on the original replication, we further incorporate several antisocial behavior variables as a core part of our extended analysis. These include drunk driving, drinking frequency, marijuana use frequency, and whether the respondent has ever injured someone badly enough to require medical attention. All variables are recoded into ordered categories, where higher values correspond roughly to more frequent participation in antisocial behaviors.
+
+In the subsequent analysis, these indicators are added as additional explanatory variables in the regression models to examine whether, among students of different ethnic and immigrant backgrounds, engagement in antisocial behavior is associated with higher or lower popularity.
+
+
+```{r}
+df.antisocial <- dataset %>%
+  select(AID, H1GH43, H1TO15, H1TO32, H1DS6) %>%
+  rename(drink_drive = H1GH43,times_drink = H1TO15,times_marijuana = H1TO32,
+         injure_someone = H1DS6)
+df.antisocial$drink_drive <- as.numeric(df.antisocial$drink_drive)
+df.antisocial$times_drink <- as.numeric(df.antisocial$times_drink)
+df.antisocial$times_marijuana <- as.numeric(df.antisocial$times_marijuana)
+df.antisocial$injure_someone <- as.numeric(df.antisocial$injure_someone)
+df.antisocial$drink_drive <- ifelse(
+  df.antisocial$drink_drive == 1, "Never",
+  ifelse(df.antisocial$drink_drive == 2, "1",
+  ifelse(df.antisocial$drink_drive == 3, "2 or 3",
+  ifelse(df.antisocial$drink_drive == 4, "4 or 5", "6 or more"))))
+df.antisocial$times_drink <- ifelse(
+  df.antisocial$times_drink == 1, "Everyday/almost everyday",
+  ifelse(df.antisocial$times_drink == 2, "3-5 days",
+  ifelse(df.antisocial$times_drink == 3, "1 or 2 days/week",
+  ifelse(df.antisocial$times_drink == 4, "2 or 3 days/month",
+  ifelse(df.antisocial$times_drink == 5, "Once a month (3-12 times/year)",
+  ifelse(df.antisocial$times_drink == 6, "1 or 2 days/year", "Never"))))))
+df.antisocial$injure_someone <- ifelse(
+  df.antisocial$injure_someone == 1, "Never",
+  ifelse(df.antisocial$injure_someone == 2, "1 or 2",
+  ifelse(df.antisocial$injure_someone == 3, "3 or 4", "5 or more")))
+df.antisocial$times_marijuana <- cut(
+  df.antisocial$times_marijuana,
+  breaks = c(-Inf, 0, 10, 20, 30, 40, 50, 60, 70, 100, Inf),
+  labels = c("None", "Less than 10", "10 to 20", "20 to 30", "30 to 40",
+    "40 to 50", "50 to 60", "60 to 70", "70 to 100", "100 or more"))
+df.antisocial <- df.antisocial %>%
+  mutate(across(where(is.numeric), ~ replace(., is.na(.), 0)),
+         across(where(is.factor),  ~ fct_na_value_to_level(., level = "0")))
+df.antisocial <- df.antisocial %>%
+  mutate(across(everything(), ~ replace(., is.na(.), 0)))
+```
+
+# Merging the Dataset
+
+After combining all constructed variables and restricting the sample to non-immigrant students, we obtain the final analytical dataset. Compared with the original Add Health public-use sample, this dataset is slightly smaller because we retain only observations with non-missing values for GPA, race and immigrant status, popularity, and all control variables.
+
+
+```{r}
+df.antisocial <- df.antisocial %>%
+  rename(`Drink and drive` = drink_drive,`Times you have drank` = times_drink,
+    `Times you used marijuana` = times_marijuana,
+    `Seriously injured someone` = injure_someone)
+independent <- merge(df.antisocial, df.race_cat) %>%
+  merge(gpa) %>%
+  merge(gen) %>%
+  merge(df.independent)
+final <- subset(independent, Generation == "Non-immigrant")
+df <- merge(independent, df.control)
+df$`Race and immigration` <- paste(df$Race_category, df$Generation)
+df.final <- subset(df, Generation == "Non-immigrant")
+```
+
+# Replicating Figure 1
+
+We replicate Figure 1 from the original student project, which illustrates the distribution of GPA and the corresponding number of friendship nominations across racial groups. Overall, White and African-American students have slightly higher median nomination counts, while some minority groups show somewhat lower medians. However, the distributions overlap substantially across all racial categories, suggesting that visual differences in popularity by race are not very large.
+
+In the next step, we estimate regression models that jointly control for academic performance and a range of covariates to assess whether these differences remain statistically significant.
+
+
+```{r}
+ggplot(df.final,aes(x = num_nom, y = gpa, fill = Race_category)) +
+  labs(title = "Figure 1. Relationship between ethnicity \nand GPA",
+       subtitle = "Data from Addhealth",xlab = "Ethnicity",ylab = "GPA",
+       fill = "Ethnicity") + geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90)) + scale_fill_viridis_d()
+```
+
+# Replicating Table 1
+
+Following the descriptive figures, we replicate the core OLS regression presented as Table 1 in the original project. Table 1 reports OLS results using the number of friendship nominations as the dependent variable. The primary variables of interest are the centered GPA variable and its interaction with the combined race–immigration status variable.
+
+Consistent with the original study, the main effect of GPA is positive: on average, students with stronger academic performance receive more peer nominations.
+
+The interaction terms capture whether the relationship between GPA and popularity is stronger or weaker relative to the reference group for different race–immigration combinations. Some groups appear to receive greater social returns when they perform well academically, while others exhibit weaker or even slightly negative returns. Most interaction coefficients are not statistically significant at conventional levels, suggesting that in this public-use sample, differences in the “social returns” to academic achievement across racial groups are not particularly large.
+
+
+```{r}
+test <- lm(num_nom ~ center * `Race and immigration` + live_mom + live_twin 
+           + twin + adopt_bio + adopted +job_dad + edu_dad + work_dad + 
+             work_mom + job_mom + edu_mom, data = df)
+```
+
+
+```{r}
+tab_model(test, string.est = "Coefficient", string.ci  = "Conf. Int (95%)",
+          title = "Table 1. Regression results for Number of nominations",
+          keep = "center")
+```
+
+# Replicating Table 2
+
+Building on the successful replication of Figure 1 and Table 1, we further reproduce Table 2, which extends the baseline model by adding several antisocial behavior indicators. The coefficients reflect whether students who engage in these behaviors receive more or fewer friendship nominations after controlling for GPA and race–immigration status.
+
+The results show that the coefficients on antisocial behavior are generally small, and most are not statistically significant. Within this sample, once academic performance and basic demographic characteristics are taken into account, engaging in antisocial behavior does not systematically increase a student’s popularity. In some cases, higher levels of antisocial behavior are associated with slightly fewer friendship nominations, consistent with the view that such behaviors may impose social costs rather than confer social benefits within peer groups.
+
+
+```{r}
+antisocial <- lm(num_nom ~ center * `Race and immigration` + `Drink and drive` 
+                 + `Times you have drank` + `Times you used marijuana` 
+                 + `Seriously injured someone`, data = df)
+```
+
+
+
+```{r}
+table2 <- tab_model(antisocial, string.est = "Coefficient",
+                    string.ci = "Conf. Int (95%)",title = 
+                    "Table 2. Regression results for antisocial 
+                    behaviour by ethnicity and GPA",keep = "Race")
+table2
+```
+
+# Extended Analysis: Robustness Check Using Count Models for Friendship Nominations
+
+As an additional robustness check, we account for the count nature of the dependent variable. The number of friendship nominations, `num_nom`, is a non-negative integer variable. While OLS can offer a descriptive approximation, likelihood-based count models such as Poisson and negative binomial regression are more appropriate for this type of outcome.
+
+Before estimating these models, we compare the mean and variance of `num_nom` and find clear evidence of overdispersion relative to the Poisson assumption. Accordingly, we estimate both Poisson and negative binomial regressions using the same set of explanatory variables as in the baseline OLS model. These models allow us to assess whether the main conclusions hold when the dependent variable is modeled explicitly as count data.
+
+```{r}
+library(MASS)
+# Poisson
+pois1 <- glm(num_nom ~ center * `Race and immigration` +
+    live_mom + live_twin + twin + adopt_bio + adopted +
+    job_dad + edu_dad + work_dad + work_mom + job_mom + edu_mom,
+  family = poisson(link = "log"), data   = df)
+
+mean_num <- mean(df$num_nom, na.rm = TRUE)
+var_num <- var(df$num_nom,  na.rm = TRUE)
+c(mean = mean_num, variance = var_num)
+nb1 <- MASS::glm.nb(num_nom ~ center * `Race and immigration` +
+    live_mom + live_twin + twin + adopt_bio + adopted +
+    job_dad + edu_dad + work_dad + work_mom + job_mom + edu_mom, data = df)
+```
+
+
+```{r}
+tab_model(pois1, nb1, string.est = "Coefficient", 
+          string.ci  = "Conf. Int (95%)",dv.labels  = 
+            c("Poisson model", "Negative binomial model"),
+  title = "Table 3. Robustness check with count 
+  models for Number of nominations", keep = "center")
+```
+
+Table 3 shows that the coefficient on `center` (standardized GPA) is close to 1 in both models. The confidence intervals are wide and the p-values are far above 0.05, indicating that the marginal effect of GPA on the number of friendship nominations is modest. The count models do not reveal a stronger or more significant effect than OLS.
+
+For the interaction terms between GPA and `Race and immigration`, most incidence rate ratios (IRRs) are also very close to 1, with confidence intervals that commonly cross 1 and non-significant p-values. This suggests that differences in the “social return to academic achievement” across race–immigration groups remain limited when using count models. In the Poisson model, a few minority combinations (such as Korean Immigrant and Race (Other) Immigrant) exhibit IRRs significantly below 1 at the 5 percent level, which would imply lower social returns to GPA increases. However, these effects are no longer significant in the negative binomial model. Given the small sample sizes for these groups and the very wide confidence intervals, these apparent “significant” results are not robust and likely reflect sampling noise rather than systematic patterns.
+
+Similarly, the extreme coefficients and unbounded confidence intervals for groups such as Japanese Immigrant and Vietnamese Immigrant indicate very sparse data, making the model estimates for these categories unreliable.
+
+Taken together, the Poisson and negative binomial results suggest that, conditional on the same covariates, the conclusions are consistent with those from OLS. Students with higher GPA are slightly more popular on average, but differences in social returns across race and immigrant groups are not statistically meaningful in the public-use Add Health sample. Our main findings about the social return to academic performance are therefore robust to alternative model specifications.
+
+
