@@ -34,7 +34,6 @@ The three datasets are merged using the unique respondent identifier `AID`, form
 
 The final analytical sample `df.final` is restricted to non-immigrant adolescents with complete information on GPA, ethnicity, immigration status, popularity, and all relevant control variables.
 
----
 
 ## 3. Replication
 
